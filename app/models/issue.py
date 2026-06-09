@@ -21,6 +21,6 @@ class Issue(Base):
     description = Column(Text, nullable=True)
     status      = Column(Enum(IssueStatus), default=IssueStatus.OPEN, nullable=False)
     created_at  = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at  = Column(DateTime,
-                         default=lambda: datetime.now(timezone.utc),
+    updated_at  = Column(DateTime, nullable=True,
                          onupdate=lambda: datetime.now(timezone.utc))
+    deleted_at  = Column(DateTime, nullable=True)

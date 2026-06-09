@@ -42,5 +42,6 @@ class IssueResponse(IssueBase):
     """Schema for API responses — includes DB-generated fields."""
     id: int
     created_at: datetime
+    updated_at: datetime | None = None 
 
     model_config = ConfigDict(from_attributes=True)  # reads SQLAlchemy model attrs
