@@ -1,2 +1,3 @@
 # Models package
-from app.models.issue import Issue, IssueStatus
+from app.models.models import Issue, IssueStatus, User, RefreshToken
+

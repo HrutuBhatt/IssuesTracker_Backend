@@ -4,7 +4,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.models.issue import Issue
+from app.models import Issue
 from app.schemas.issue import IssueCreate, IssueUpdate
 
 

@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     APP_ENV: str = "development"
     DATABASE_URL: str 
-    
+    SECRET_KEY: str
     class Config:
         env_file = ".env"
         case_sensitive = True

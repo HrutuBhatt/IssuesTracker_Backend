@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 
-from app.models.issue import Issue
+from app.models import Issue
 from app.repository.issue_repository import IssueRepository
 from app.schemas.issue import IssueCreate, IssueUpdate
 

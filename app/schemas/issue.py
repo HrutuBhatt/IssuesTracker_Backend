@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from app.models.issue import IssueStatus
+from app.models import IssueStatus
 
 
 class IssueBase(BaseModel):
