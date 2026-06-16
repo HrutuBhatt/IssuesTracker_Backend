@@ -59,6 +59,7 @@ class AuthService:
     def refresh_user_token(self, refresh_token: str) -> dict:
         user_id = decode_token(refresh_token)
         if not user_id:
+            self.repo.delete_refresh_token(user_id, refresh_token)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired refresh token"

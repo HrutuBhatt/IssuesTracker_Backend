@@ -1,15 +1,11 @@
 from datetime import datetime
-
 from pydantic import BaseModel, ConfigDict, field_validator
-
-from app.models import IssueStatus
+from app.models.models import IssueStatus
 
 
 class IssueBase(BaseModel):
-    """Shared fields between Create and Response."""
     title: str
     description: str | None = None
-    status: IssueStatus = IssueStatus.OPEN
 
     @field_validator("title")
     @classmethod
@@ -17,31 +13,38 @@ class IssueBase(BaseModel):
         if not v.strip():
             raise ValueError("Title must not be blank")
         return v.strip()
-
+        
 
 class IssueCreate(IssueBase):
-    """Schema for POST /issues — title is required."""
-    pass
+    assigned_to: int | None = None
 
 
-class IssueUpdate(BaseModel):
-    """Schema for PUT /issues/<id> — all fields optional."""
-    title: str | None = None
-    description: str | None = None
+class IssueUpdate(IssueBase):
     status: IssueStatus | None = None
-
-    @field_validator("title")
-    @classmethod
-    def title_must_not_be_blank(cls, v: str | None) -> str | None:
-        if v is not None and not v.strip():
-            raise ValueError("Title must not be blank")
-        return v.strip() if v else v
+    assigned_to: int | None = None
 
 
-class IssueResponse(IssueBase):
-    """Schema for API responses — includes DB-generated fields."""
+class IssueResponse(BaseModel):
     id: int
+    project_id: int
+    title: str
+    description: str | None = None
+    status: IssueStatus
+    created_by: int
+    assigned_to: int | None = None
     created_at: datetime
-    updated_at: datetime | None = None 
+    updated_at: datetime | None = None
 
-    model_config = ConfigDict(from_attributes=True)  # reads SQLAlchemy model attrs
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IssueHistoryResponse(BaseModel):
+    id: int
+    issue_id: int
+    changed_by: int
+    field_changed: str
+    old_value: str | None = None
+    new_value: str | None = None
+    changed_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

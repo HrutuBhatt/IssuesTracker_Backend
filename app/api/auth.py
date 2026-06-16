@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.models import User
+from app.models.models import User
 from app.auth.dependencies import get_current_user
-from app.schemas.user import UserRegister, UserLogin, TokenResponse, RefreshRequest
+from app.schemas.user import UserRegister, UserLogin, TokenResponse, RefreshRequest, UserResponse
 from app.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -37,3 +37,17 @@ def logout(
     service = AuthService(db)
     service.logout_user(current_user.id, payload.refresh_token)
     return {"detail": "Successfully logged out"}
+
+
+@router.get("/users/search", response_model=list[UserResponse])
+def search_users(
+    email: str = Query(..., min_length=1),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Search users by email prefix, excluding the caller."""
+    users = db.query(User).filter(
+        User.email.like(f"%{email}%"),
+        User.id != current_user.id
+    ).limit(10).all()
+    return users
