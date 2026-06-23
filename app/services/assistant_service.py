@@ -49,7 +49,7 @@ TOOL_DEFINITIONS = [
                     "group_by": {
                         "type": "string",
                         "description": "How to group the summary. Defaults to 'status'.",
-                        "enum": ["status", "assignee", "age"],
+                        "enum": ["status", "assigned_to", "age"],
                     },
                     "status_filter": {
                         "type": "string",
@@ -276,7 +276,7 @@ class AssistantService:
                 counts[issue.status.value] = counts.get(issue.status.value, 0) + 1
             return {"total": len(issues), "by_status": counts}
 
-        if group_by == "assignee":
+        if group_by == "assigned_to":
             counts = {}
             for issue in issues:
                 key = str(issue.assigned_to) if issue.assigned_to else "unassigned"
