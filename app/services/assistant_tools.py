@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.models import Issue, ProjectMember, ProjectRole
 from app.schemas.issue import IssueCreate, IssueUpdate, IssueResponse
 from app.services.issue_service import IssueService
+from app.services.embedding_service import get_embedding_service
 
 
 TOOL_DEFINITIONS = [
@@ -56,28 +57,70 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "find_duplicates",
+            "description": (
+                "Search for existing issues semantically similar to a proposed new issue. "
+                "MUST be called before create_issue — always. "
+                "Pass the proposed title as the query (append description if available). "
+                "Returns issues with similarity scores. "
+                "If any result has is_likely_duplicate=true (score >= 0.75), show them to the user "
+                "and ask whether they still want to create a new issue. "
+                "Only call create_issue if the user confirms or no likely duplicates are found."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Proposed issue title, optionally followed by its description.",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "create_issue",
             "description": (
                 "Create a single new issue in the current project. "
-                "Only use when the user explicitly requests issue creation."
+                "Only use when the user explicitly requests issue creation. "
+                "IMPORTANT: Always call find_duplicates first; only proceed here if no likely duplicates "
+                "were found or the user confirmed they want to create anyway. "
+                "Before calling this tool, collect missing information by asking the user one message at a time. "
+                "Required — must ask if missing: title, priority, issue_type. "
+                "For issue_type, infer from context when obvious (e.g. 'crash'/'broken' → bug, "
+                "'add'/'new feature' → feature, 'update'/'modify' → change-request); ask only if truly ambiguous. "
+                "Optional — ask once, but if user skips or says no, omit and proceed: description, assigned_to."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {
                         "type": "string",
-                        "description": "Issue title. Required. Must not be blank. Max 200 characters.",
+                        "description": "Required. Must not be blank. Max 200 characters.",
                     },
                     "description": {
                         "type": "string",
-                        "description": "Optional detailed description.",
+                        "description": "Optional. Ask the user once; omit if they decline or skip.",
+                    },
+                    "priority": {
+                        "type": "string",
+                        "description": "Required. Ask the user if not stated or not inferable from context.",
+                        "enum": ["low", "medium", "high", "critical"],
+                    },
+                    "issue_type": {
+                        "type": "string",
+                        "description": "Required. Infer from context when obvious; ask only if truly ambiguous.",
+                        "enum": ["bug", "feature", "change-request", "triage"],
                     },
                     "assigned_to": {
                         "type": "integer",
-                        "description": "Optional. User ID of the assignee from the project member list.",
+                        "description": "Optional. Ask the user once; omit and leave unassigned if they decline or skip.",
                     },
                 },
-                "required": ["title"],
+                "required": ["title", "priority", "issue_type"],
             },
         },
     },
@@ -109,6 +152,16 @@ TOOL_DEFINITIONS = [
                         "type": "string",
                         "description": "Optional. New status.",
                         "enum": ["open", "in_progress", "closed"],
+                    },
+                    "priority": {
+                        "type": "string",
+                        "description": "Optional. New priority.",
+                        "enum": ["low", "medium", "high", "critical"],
+                    },
+                    "issue_type": {
+                        "type": "string",
+                        "description": "Optional. New issue type.",
+                        "enum": ["bug", "feature", "change-request", "triage"],
                     },
                     "assigned_to": {
                         "type": "integer",
@@ -145,6 +198,8 @@ class ToolExecutor:
             return self._list_issues(args, project_id)
         if name == "summarize_issues":
             return self._summarize_issues(args, project_id)
+        if name == "find_duplicates":
+            return self._find_duplicates(args, project_id)
         if name == "create_issue":
             return self._create_issue(args, project_id, actor_id, actor_role)
         if name == "update_issue":
@@ -215,6 +270,45 @@ class ToolExecutor:
 
         return {"total": len(issues)}
 
+    def _find_duplicates(self, args: dict, project_id: int) -> dict:
+        issues = self._issue_service.get_all_issues(project_id)
+        if not issues:
+            return {"duplicates": [], "message": "No existing issues to compare against. Safe to create."}
+
+        query = args["query"]
+        embedding_svc = get_embedding_service()
+        query_vec = embedding_svc.embed(query)
+
+        THRESHOLD = 0.75
+
+        scored = []
+        for issue in issues:
+            issue_text = issue.title
+            if issue.description:
+                issue_text += " " + issue.description
+            score = embedding_svc.similarity(query_vec, embedding_svc.embed(issue_text))
+            if score >= THRESHOLD:
+                scored.append((score, issue))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        results = [
+            {
+                "id": issue.id,
+                "title": issue.title,
+                "status": issue.status.value,
+                "similarity_score": round(score, 3),
+            }
+            for score, issue in scored
+        ]
+
+        if results:
+            msg = f"Found {len(results)} likely duplicate(s). Show these to the user and ask if they still want to create a new issue."
+        else:
+            msg = "No similar issues found. Safe to create."
+
+        return {"duplicates": results, "message": msg}
+
     def _create_issue(
         self,
         args: dict,
@@ -228,6 +322,8 @@ class ToolExecutor:
         data = IssueCreate(
             title=args["title"],
             description=args.get("description"),
+            priority=args["priority"],
+            issue_type=args["issue_type"],
             assigned_to=args.get("assigned_to"),
         )
         issue = self._issue_service.create_issue(project_id, actor_id, data)
@@ -255,6 +351,10 @@ class ToolExecutor:
             update_kwargs["description"] = args["description"]
         if "status" in args:
             update_kwargs["status"] = args["status"]
+        if "priority" in args:
+            update_kwargs["priority"] = args["priority"]
+        if "issue_type" in args:
+            update_kwargs["issue_type"] = args["issue_type"]
         if args.get("unassign"):
             update_kwargs["assigned_to"] = None
         elif "assigned_to" in args:

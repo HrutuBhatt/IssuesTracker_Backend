@@ -71,6 +71,20 @@ class IssueStatus(str, enum.Enum):
     CLOSED = "closed"
 
 
+class IssuePriority(str, enum.Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class IssueType(str, enum.Enum):
+    BUG = "bug"
+    FEATURE = "feature"
+    CHANGE_REQUEST = "change-request"
+    TRIAGE = "triage"
+
+
 class Issue(Base):
     __tablename__ = "issues"
 
@@ -79,6 +93,8 @@ class Issue(Base):
     title = Column(String(200), nullable=False)
     description = Column(Text, nullable=True)
     status = Column(Enum(IssueStatus), default=IssueStatus.OPEN, nullable=False)
+    priority = Column(Enum(IssuePriority), default=IssuePriority.MEDIUM, nullable=False)
+    issue_type = Column(Enum(IssueType), default=IssueType.TRIAGE, nullable=False)
     created_by = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     assigned_to = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

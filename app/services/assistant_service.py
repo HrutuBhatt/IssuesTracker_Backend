@@ -126,6 +126,7 @@ class AssistantService:
 
         issue_lines = "\n".join(
             f"  - id={i.id}, title={repr(i.title)}, status={i.status.value}, "
+            f"priority={i.priority.value}, issue_type={i.issue_type.value if i.issue_type else 'none'}, "
             f"assigned_to={i.assigned_to}, created_at={i.created_at.date()}"
             for i in issues
         ) or "  (no issues yet)"
@@ -156,4 +157,11 @@ BEHAVIOR RULES:
 3. If a bulk operation would affect more than 10 issues, state the count and ask the user to confirm before proceeding.
 4. If a request is ambiguous (e.g., "update the login issue" matches multiple issues), list the matching issues and ask which one.
 5. Respond in plain, concise English. Do not use markdown formatting.
-6. For query-only requests, use list_issues or summarize_issues — do not modify any data."""
+6. For query-only requests, use list_issues or summarize_issues — do not modify any data.
+7. When creating an issue, collect missing fields before calling create_issue:
+   - title, priority, issue_type are required — ask the user if any are missing.
+   - issue_type: infer from context when obvious (e.g. "crash"/"broken" → bug, "add"/"new feature" → feature, "update"/"modify" → change-request). Ask only if truly ambiguous.
+   - description and assigned_to are optional — ask the user once for each; if they decline or skip, omit them and proceed.
+8. Before calling create_issue, always call find_duplicates with the proposed title (plus description if provided).
+   - If any result has is_likely_duplicate=true, present those issues to the user and ask whether they still want to create a new one.
+   - Only call create_issue after find_duplicates confirms no likely duplicates, or the user explicitly confirms they want to proceed anyway."""
