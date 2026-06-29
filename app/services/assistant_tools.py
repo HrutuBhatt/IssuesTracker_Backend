@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.models import Issue, ProjectMember, ProjectRole
@@ -15,7 +15,7 @@ TOOL_DEFINITIONS = [
             "description": (
                 "Retrieve all issues for the current project. "
                 "Always call this before update_issue to confirm real issue IDs. "
-                "Returns id, title, status, assigned_to (user_id), assigned_to_email, and created_at for each issue."
+                "Returns id, title, status, issue_type, priority, assigned_to (user_id), assigned_to_email, and created_at for each issue."
             ),
             "parameters": {
                 "type": "object",
@@ -24,7 +24,20 @@ TOOL_DEFINITIONS = [
                         "type": "string",
                         "description": "Optional. Limit results to this status only.",
                         "enum": ["open", "in_progress", "closed"],
-                    }
+                    },
+                    "since_hours": {
+                        "type": "integer",
+                        "description": "Optional. Only return issues created in the last N hours. Use for bulk triage to scope recent reports.",
+                    },
+                    "issue_type_filter": {
+                        "type": "string",
+                        "description": "Optional. Limit results to this issue type only.",
+                        "enum": ["bug", "feature", "change-request", "triage"],
+                    },
+                    "unassigned_only": {
+                        "type": "boolean",
+                        "description": "Optional. If true, only return issues with no assignee.",
+                    },
                 },
             },
         },
@@ -176,6 +189,54 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_issue",
+            "description": (
+                "Permanently delete a single issue by its ID. "
+                "Only available to ADMIN role — will error for DEVELOPER or CLIENT. "
+                "During bulk triage, only call this after the user explicitly confirms they want the original issues deleted."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_id": {
+                        "type": "integer",
+                        "description": "ID of the issue to delete.",
+                    },
+                },
+                "required": ["issue_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_assignee",
+            "description": (
+                "Fetch developer information to help decide who to assign a clustered issue to. "
+                "Returns all developers in the project with their current open or in progress issue count and "
+                "recent closed issue titles. Use this data to reason about who has relevant past "
+                "experience and who is least loaded. Always call this once per cluster before create_issue."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cluster_description": {
+                        "type": "string",
+                        "description": "Root cause label and summary of the cluster. Included in the response so you can reason about it alongside developer history.",
+                    },
+                    "cluster_issue_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "IDs of the issues being consolidated into this cluster. Excluded from developer history so they do not influence the assignment decision.",
+                    },
+                },
+                "required": ["cluster_description", "cluster_issue_ids"],
+            },
+        },
+    },
 ]
 
 
@@ -200,6 +261,10 @@ class ToolExecutor:
             return self._summarize_issues(args, project_id)
         if name == "find_duplicates":
             return self._find_duplicates(args, project_id)
+        if name == "find_assignee":
+            return self._find_assignee(args, project_id)
+        if name == "delete_issue":
+            return self._delete_issue(args, project_id, actor_role)
         if name == "create_issue":
             return self._create_issue(args, project_id, actor_id, actor_role)
         if name == "update_issue":
@@ -227,6 +292,20 @@ class ToolExecutor:
 
     def _list_issues(self, args: dict, project_id: int) -> list:
         issues = self._get_filtered_issues(project_id, args.get("status_filter"))
+
+        if args.get("since_hours"):
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=int(args["since_hours"]))
+            issues = [
+                i for i in issues
+                if (i.created_at if i.created_at.tzinfo else i.created_at.replace(tzinfo=timezone.utc)) >= cutoff
+            ]
+
+        if args.get("issue_type_filter"):
+            issues = [i for i in issues if i.issue_type and i.issue_type.value == args["issue_type_filter"]]
+
+        if args.get("unassigned_only"):
+            issues = [i for i in issues if i.assigned_to is None]
+
         member_map = self._get_member_map(project_id)
         result = []
         for issue in issues:
@@ -308,6 +387,65 @@ class ToolExecutor:
             msg = "No similar issues found. Safe to create."
 
         return {"duplicates": results, "message": msg}
+
+    def _delete_issue(self, args: dict, project_id: int, actor_role: ProjectRole) -> dict:
+        if actor_role != ProjectRole.ADMIN:
+            raise PermissionError("Only admins can delete issues.")
+
+        issue_id = int(args["issue_id"])
+        existing = self._issue_service.get_issue_by_id(issue_id)
+
+        if existing.project_id != project_id:
+            raise PermissionError("Issue does not belong to this project.")
+
+        self._issue_service.delete_issue(issue_id)
+        return {"deleted": True, "issue_id": issue_id}
+
+    def _find_assignee(self, args: dict, project_id: int) -> dict:
+        cluster_issue_ids = set(args.get("cluster_issue_ids") or [])
+
+        developers = [
+            m for m in self.get_members(project_id)
+            if m.role == ProjectRole.DEVELOPER and m.user
+        ]
+        if not developers:
+            return {
+                "cluster_description": args["cluster_description"],
+                "developers": [],
+                "message": "No developers found in this project.",
+            }
+
+        all_issues = self._issue_service.get_all_issues(project_id)
+
+        result = []
+        for member in developers:
+            uid = member.user_id
+
+            assigned_count = sum(
+                1 for i in all_issues
+                if i.assigned_to == uid
+                and i.status.value in ("open", "in_progress")
+                and i.id not in cluster_issue_ids
+            )
+
+            recent_closed = [
+                i.title for i in all_issues
+                if i.assigned_to == uid
+                and i.status.value == "closed"
+                and i.id not in cluster_issue_ids
+            ][-5:]
+
+            result.append({
+                "user_id": uid,
+                "email": member.user.email,
+                "open_issue_count": assigned_count,
+                "recent_closed_issues": recent_closed,
+            })
+
+        return {
+            "cluster_description": args["cluster_description"],
+            "developers": result,
+        }
 
     def _create_issue(
         self,
