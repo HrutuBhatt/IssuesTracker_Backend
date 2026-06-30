@@ -7,6 +7,7 @@ from groq import RateLimitError, APIConnectionError, APIStatusError
 from app.models.models import ProjectRole
 from app.services.assistant_client import AssistantClient
 from app.services.assistant_tools import TOOL_DEFINITIONS, ToolExecutor
+from app.services.guardrails import GuardrailService
 
 MAX_ITER = 5
 MODEL = "llama-3.3-70b-versatile"
@@ -18,6 +19,7 @@ class AssistantService:
     def __init__(self, client: AssistantClient, db: Session):
         self.client = client.groq
         self._executor = ToolExecutor(db)
+        self._guardrail = GuardrailService(client.groq)
 
     def run_agent(
         self,
@@ -29,6 +31,11 @@ class AssistantService:
     ) -> tuple[str, bool]:
         """Run the agentic tool-use loop. Returns (reply_text, issues_modified)."""
         issues_modified = False
+
+        is_safe, reason = self._guardrail.check_input(prompt)
+        if not is_safe:
+            print(f"[Guardrail] input blocked: {reason}")
+            return "I can't process that request. Please keep questions related to issue tracking.", False
 
         try:
             system_prompt = self._build_system_prompt(project_id, actor_role)
@@ -84,8 +91,13 @@ class AssistantService:
             messages.append(assistant_entry)
 
             if choice.finish_reason == "stop" or not message.tool_calls:
-                print(f"[Agent] terminating — reply: {(message.content or '')[:120]}")
-                return message.content or "Done.", issues_modified
+                reply = message.content or "Done."
+                print(f"[Agent] terminating — reply: {reply[:120]}")
+                is_safe, reason = self._guardrail.check_output(reply)
+                if not is_safe:
+                    print(f"[Guardrail] output blocked: {reason}")
+                    return "I encountered an issue generating an unsafe response. Please try again.", issues_modified
+                return reply, issues_modified
 
             for tc in message.tool_calls:
                 print(f"[Agent] calling tool={tc.function.name} args={tc.function.arguments}")
