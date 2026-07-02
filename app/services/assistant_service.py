@@ -28,19 +28,20 @@ class AssistantService:
         actor_id: int,
         actor_role: ProjectRole,
         history: list[dict] | None = None,
-    ) -> tuple[str, bool]:
-        """Run the agentic tool-use loop. Returns (reply_text, issues_modified)."""
+    ) -> tuple[str, bool, list[str]]:
+        """Run the agentic tool-use loop. Returns (reply_text, issues_modified, trajectory)."""
         issues_modified = False
+        trajectory: list[dict] = []
 
         is_safe, reason = self._guardrail.check_input(prompt)
         if not is_safe:
             print(f"[Guardrail] input blocked: {reason}")
-            return "I can't process that request. Please keep questions related to issue tracking.", False
+            return "I can't process that request. Please keep questions related to issue tracking.", False, []
 
         try:
             system_prompt = self._build_system_prompt(project_id, actor_role)
         except Exception as e:
-            return f"Failed to load project context: {e}", issues_modified
+            return f"Failed to load project context: {e}", issues_modified, trajectory
 
         messages: list[dict] = [
             {"role": "system", "content": system_prompt},
@@ -61,15 +62,15 @@ class AssistantService:
                 )
             except RateLimitError:
                 print("[Agent] ERROR: rate limited")
-                return "The AI assistant is rate limited. Please wait a moment and try again.", issues_modified
+                return "The AI assistant is rate limited. Please wait a moment and try again.", issues_modified, trajectory
             except APIConnectionError:
                 print("[Agent] ERROR: connection failed")
-                return "Could not reach the AI service. Please check your connection and try again.", issues_modified
+                return "Could not reach the AI service. Please check your connection and try again.", issues_modified, trajectory
             except APIStatusError as e:
                 print(f"[Agent] ERROR: APIStatusError {e.status_code}")
                 if e.status_code == 400:
-                    return "I had trouble understanding that request. Could you try rephrasing it?", issues_modified
-                return "AI assistant is temporarily unavailable. Please try again.", issues_modified
+                    return "I had trouble understanding that request. Could you try rephrasing it?", issues_modified, trajectory
+                return "AI assistant is temporarily unavailable. Please try again.", issues_modified, trajectory
 
             choice = response.choices[0]
             message = choice.message
@@ -96,14 +97,15 @@ class AssistantService:
                 is_safe, reason = self._guardrail.check_output(reply)
                 if not is_safe:
                     print(f"[Guardrail] output blocked: {reason}")
-                    return "I encountered an issue generating an unsafe response. Please try again.", issues_modified
-                return reply, issues_modified
+                    return "I encountered an issue generating an unsafe response. Please try again.", issues_modified, trajectory
+                return reply, issues_modified, trajectory
 
             for tc in message.tool_calls:
                 print(f"[Agent] calling tool={tc.function.name} args={tc.function.arguments}")
                 try:
                     args = json.loads(tc.function.arguments) or {}
                     result = self._executor.execute(tc.function.name, args, project_id, actor_id, actor_role)
+                    trajectory.append({"name": tc.function.name, "args": args})
                     if tc.function.name in ("create_issue", "update_issue", "delete_issue"):
                         issues_modified = True
                     tool_content = json.dumps(result)
@@ -125,7 +127,7 @@ class AssistantService:
                 })
 
         print(f"[Agent] hit MAX_ITER={MAX_ITER}")
-        return "I reached the maximum number of steps. Please try a more specific request.", issues_modified
+        return "I reached the maximum number of steps. Please try a more specific request.", issues_modified, trajectory
 
     def _build_system_prompt(self, project_id: int, actor_role: ProjectRole) -> str:
         issues = self._executor.get_all_issues(project_id)

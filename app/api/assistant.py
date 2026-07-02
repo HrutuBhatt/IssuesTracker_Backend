@@ -24,7 +24,7 @@ def run_assistant(
 ):
     try:
         service = AssistantService(assistant_client, db)
-        reply, issues_modified = service.run_agent(
+        reply, issues_modified, _ = service.run_agent(
             prompt=body.prompt,
             project_id=project_id,
             actor_id=current_user.id,
