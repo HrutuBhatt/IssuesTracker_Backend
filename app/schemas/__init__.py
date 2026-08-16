@@ -8,5 +8,5 @@ from app.schemas.project import (
     ProjectMemberAdd,
     ProjectMemberResponse
 )
-
+from app.schemas.assistant import AssistantRequest, AssistantResponse
 

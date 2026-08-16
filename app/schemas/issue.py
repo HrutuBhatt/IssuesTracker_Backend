@@ -1,6 +1,6 @@
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, field_validator
-from app.models.models import IssueStatus
+from app.models.models import IssueStatus, IssuePriority, IssueType
 
 
 class IssueBase(BaseModel):
@@ -16,11 +16,15 @@ class IssueBase(BaseModel):
         
 
 class IssueCreate(IssueBase):
+    priority: IssuePriority
+    issue_type: IssueType
     assigned_to: int | None = None
 
 
 class IssueUpdate(IssueBase):
     status: IssueStatus | None = None
+    priority: IssuePriority | None = None
+    issue_type: IssueType | None = None
     assigned_to: int | None = None
 
 
@@ -30,6 +34,8 @@ class IssueResponse(BaseModel):
     title: str
     description: str | None = None
     status: IssueStatus
+    priority: IssuePriority
+    issue_type: IssueType
     created_by: int
     assigned_to: int | None = None
     created_at: datetime
